@@ -21,11 +21,13 @@ class SignalGrab:
 
     @staticmethod
     def run(cmd):
+        """call subprocess and optionally log"""
         log.debug("run cmd: %r", cmd)
         p = subprocess.run(cmd, universal_newlines=True, check=True, stdout=subprocess.PIPE)
         return p.stdout
 
     def classify_file(self, src_file: Path) -> Optional[str]:
+        """use the `file` utility to determine extension"""
         file_result = self.run(["file", "--brief", str(src_file)])
         if file_result.startswith("PNG image") and "150 x 150" in file_result:
             log.info(f"skipping %s, is a thumbnail", src_file.name)
@@ -39,6 +41,7 @@ class SignalGrab:
         return extension
 
     def signal_grab(self, hours=1) -> None:
+        """grabs recent hours of images, excludes thumbnails, adds file extensions, and moves into place."""
         self.dest_dir.mkdir(exist_ok=True)
 
         _newer_than = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
