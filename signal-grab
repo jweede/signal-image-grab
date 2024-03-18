@@ -7,7 +7,6 @@ import logging
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 logging.basicConfig(level="INFO")
 log = logging.getLogger(Path(__file__).name)
@@ -17,31 +16,30 @@ class SignalGrab:
 
     signal_dir = Path("~/.config/Signal/attachments.noindex").expanduser()
     dest_dir = Path("~/Desktop/SignalGrabs").expanduser()
-    known_types = {}
 
     @staticmethod
     def run(cmd):
         """call subprocess and optionally log"""
         log.debug("run cmd: %r", cmd)
         p = subprocess.run(cmd, universal_newlines=True, check=True, stdout=subprocess.PIPE)
+        log.debug("run output: %r", cmd)
         return p.stdout
 
-    def classify_file(self, src_file: Path) -> Optional[str]:
-        """use the `file` utility to determine extension"""
-        file_result = self.run(["file", "--brief", str(src_file)])
-        if file_result.startswith("PNG image") and "150 x 150" in file_result:
-            log.info(f"skipping %s, is a thumbnail", src_file.name)
-            return None
+    def find_extension(self, src_file: Path) -> str:
+        file_result = self.run(["file", "--brief", "--mime-type", src_file])
+        _, ext = file_result.strip().split("/")
+        if ext.startswith("x-"):
+            ext = ext[2:]
+        return ext
 
-        type_header = file_result.split(",")[0]
-        extension = self.known_types.get(type_header)
-        if not extension:
-            extension = self.run(["file", "--brief", "--extension", str(src_file)]).strip().split("/")[0]
-            self.known_types[type_header] = extension
-        return extension
+    def check_thumbnail(self, src_file) -> bool:
+        file_result = self.run(["file", "--brief", src_file])
+        return file_result.startswith("PNG image") and "150 x 150" in file_result
 
     def signal_grab(self, hours=1) -> None:
-        """grabs recent hours of images, excludes thumbnails, adds file extensions, and moves into place."""
+        """
+        grabs recent hours of images, excludes thumbnails, adds file extensions, and copies to dest.
+        """
         self.dest_dir.mkdir(exist_ok=True)
 
         _newer_than = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
@@ -49,8 +47,11 @@ class SignalGrab:
         filenames = self.run(["find", self.signal_dir, "-type", "f", "-newerct", _newer_than])
         for filename in filenames.splitlines():
             src_file = Path(filename)
-            extension = self.classify_file(src_file)
-            if extension is None:
+            extension = self.find_extension(src_file)
+
+            # deal with thumbnails
+            if extension == "png" and self.check_thumbnail(src_file):
+                log.info(f"skipping %s, is a thumbnail", src_file.name)
                 continue
 
             assert src_file.exists()
