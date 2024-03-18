@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""
+Script to grab recent media from signal.
+"""
+import argparse
+import logging
+import subprocess
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+logging.basicConfig(level="INFO")
+log = logging.getLogger(Path(__file__).name)
+
+
+class SignalGrab:
+
+    signal_dir = Path("~/.config/Signal/attachments.noindex").expanduser()
+    dest_dir = Path("~/Desktop/SignalGrabs").expanduser()
+    known_types = {}
+
+    @staticmethod
+    def run(cmd):
+        log.debug("run cmd: %r", cmd)
+        p = subprocess.run(cmd, universal_newlines=True, check=True, stdout=subprocess.PIPE)
+        return p.stdout
+
+    def classify_file(self, src_file: Path) -> Optional[str]:
+        file_result = self.run(["file", "--brief", str(src_file)])
+        if file_result.startswith("PNG image") and "150 x 150" in file_result:
+            log.info(f"skipping %s, is a thumbnail", src_file.name)
+            return None
+
+        type_header = file_result.split(",")[0]
+        extension = self.known_types.get(type_header)
+        if not extension:
+            extension = self.run(["file", "--brief", "--extension", str(src_file)]).strip().split("/")[0]
+            self.known_types[type_header] = extension
+        return extension
+
+    def signal_grab(self, hours=1) -> None:
+        self.dest_dir.mkdir(exist_ok=True)
+
+        _newer_than = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+
+        filenames = self.run(["find", self.signal_dir, "-type", "f", "-newerct", _newer_than])
+        for filename in filenames.splitlines():
+            src_file = Path(filename)
+            extension = self.classify_file(src_file)
+            if extension is None:
+                continue
+
+            assert src_file.exists()
+            dest_file = self.dest_dir / f"{src_file.name}.{extension}"
+            if dest_file.exists():
+                log.info(f"skipping %s, exists in dest", dest_file.name)
+                continue
+            self.run(["cp", "-n", src_file, dest_file])
+
+    @staticmethod
+    def main(argv=None):
+        parser = argparse.ArgumentParser(
+            description=__doc__,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        parser.add_argument("-d", "--debug", action="store_true")
+        parser.add_argument("--hours", default=1, type=int, help="previous hours to grab")
+        args = parser.parse_args(argv)
+
+        if args.debug:
+            log.setLevel(logging.DEBUG)
+
+        sg = SignalGrab()
+        sg.signal_grab(hours=args.hours)
+
+
+if __name__ == "__main__":
+    SignalGrab.main()
