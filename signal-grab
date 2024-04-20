@@ -14,8 +14,12 @@ log = logging.getLogger(Path(__file__).name)
 
 class SignalGrab:
 
+    __slots__ = ("dryrun",)
     signal_dir = Path("~/.config/Signal/attachments.noindex").expanduser()
     dest_dir = Path("~/Desktop/SignalGrabs").expanduser()
+
+    def __init__(self, dryrun=False):
+        self.dryrun = dryrun
 
     @staticmethod
     def run(cmd):
@@ -33,25 +37,35 @@ class SignalGrab:
         return ext
 
     def check_thumbnail(self, src_file) -> bool:
+        """test for thumbnails"""
         file_result = self.run(["file", "--brief", src_file])
         return file_result.startswith("PNG image") and "150 x 150" in file_result
 
-    def signal_grab(self, hours=1) -> None:
+    def check_pfp(self, src_file) -> bool:
+        """test for profile pictures"""
+        file_result = self.run(["file", "--brief", src_file])
+        return file_result.startswith("JPEG image") and "96x96" in file_result
+
+    def signal_grab(self, hours=1) -> int:
         """
         grabs recent hours of images, excludes thumbnails, adds file extensions, and copies to dest.
         """
         self.dest_dir.mkdir(exist_ok=True)
 
         _newer_than = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+        images_grabbed = 0
 
-        filenames = self.run(["find", self.signal_dir, "-type", "f", "-newerct", _newer_than])
+        filenames = self.run(["find", self.signal_dir, "-type", "f", "-newermt", _newer_than])
         for filename in filenames.splitlines():
             src_file = Path(filename)
             extension = self.find_extension(src_file)
 
             # deal with thumbnails
             if extension == "png" and self.check_thumbnail(src_file):
-                log.info(f"skipping %s, is a thumbnail", src_file.name)
+                log.debug(f"skipping %s, is a thumbnail", src_file.name)
+                continue
+            elif extension == "jpeg" and self.check_pfp(src_file):
+                log.debug(f"skipping %s, is a pfp", src_file.name)
                 continue
 
             assert src_file.exists()
@@ -59,7 +73,12 @@ class SignalGrab:
             if dest_file.exists():
                 log.info(f"skipping %s, exists in dest", dest_file.name)
                 continue
-            self.run(["cp", "-n", src_file, dest_file])
+            if self.dryrun:
+                log.info("DRYRUN cp -n %r %r", src_file, dest_file)
+            else:
+                self.run(["cp", "-n", src_file, dest_file])
+            images_grabbed += 1
+        return images_grabbed
 
     @staticmethod
     def main(argv=None):
@@ -68,14 +87,16 @@ class SignalGrab:
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         parser.add_argument("-d", "--debug", action="store_true")
+        parser.add_argument("-n", "--dry-run", action="store_true")
         parser.add_argument("--hours", default=1, type=int, help="previous hours to grab")
         args = parser.parse_args(argv)
 
         if args.debug:
             log.setLevel(logging.DEBUG)
 
-        sg = SignalGrab()
-        sg.signal_grab(hours=args.hours)
+        sg = SignalGrab(dryrun=args.dry_run)
+        images_grabbed = sg.signal_grab(hours=args.hours)
+        log.info("Images Grabbed: %d", images_grabbed)
 
 
 if __name__ == "__main__":
